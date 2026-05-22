@@ -720,7 +720,9 @@
                 <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
             </svg>
         </button>
-        <button class="btn btn-secondary" onclick="exportCSV()">↓ Export</button>
+        <button class="btn btn-secondary" onclick="exportCSV()">↓ CSV</button>
+        <button class="btn btn-secondary" onclick="exportJSON()" title="Export holdings as JSON backup">↓ JSON</button>
+        <button class="btn btn-secondary" onclick="importJSON()" title="Import holdings from JSON backup">↑ Import</button>
         <button class="btn btn-secondary" onclick="loadDemo()">Demo Data</button>
         <div class="ws-pill" id="ws-pill" title="WebSocket connection status">
             <div class="ws-dot" id="ws-dot"></div>
@@ -1204,8 +1206,9 @@ function updateWsPill(state) {
     const label = document.getElementById('ws-label');
     if (!pill || !label) return;
     pill.className    = 'ws-pill' + (state === 'live' ? ' live' : state === 'error' ? ' error' : '');
-    label.textContent = state === 'live'  ? 'Live Stream' :
-                        state === 'error' ? 'WS Error'    : 'Connecting…';
+    label.textContent = state === 'live'     ? 'Live Stream'  :
+                        state === 'error'    ? 'WS Error'     :
+                        state === 'no-data'  ? 'No holdings'  : 'Connecting…';
 }
 
 function connectWS() {
@@ -1213,7 +1216,7 @@ function connectWS() {
         holdings.filter(h => ['stock','etf','bond','other'].includes(h.type)).map(h => h.symbol)
     )];
 
-    if (!equitySyms.length) { updateWsPill('error'); return; }
+    if (!equitySyms.length) { updateWsPill('no-data'); return; }
 
     // If already open, just subscribe any new symbols
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -2139,8 +2142,49 @@ function fmtNum(v) {
 }
 
 /* ================================================================
-   EXPORT
+   EXPORT / IMPORT
 ================================================================ */
+function exportJSON() {
+    if (!holdings.length) { toast('No holdings to export', 'info'); return; }
+    const blob = new Blob([JSON.stringify(holdings, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `portfolio_${todayStr()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Holdings exported as JSON', 'success');
+}
+
+function importJSON() {
+    const input = document.createElement('input');
+    input.type  = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const text    = await file.text();
+            const parsed  = JSON.parse(text);
+            if (!Array.isArray(parsed) || !parsed.length) throw new Error('Invalid format');
+            // Validate each entry has minimum required fields
+            for (const h of parsed) {
+                if (!h.symbol || !h.type || h.qty == null || h.avgCost == null)
+                    throw new Error(`Missing fields on entry: ${JSON.stringify(h)}`);
+            }
+            holdings = parsed;
+            persist();
+            renderAll();
+            await refreshPrices();
+            toast(`Imported ${holdings.length} holding${holdings.length !== 1 ? 's' : ''}`, 'success');
+        } catch(err) {
+            toast('Import failed — file must be a valid Portfolio Pro JSON export', 'error');
+            console.error('[import]', err);
+        }
+    };
+    input.click();
+}
+
 function exportCSV() {
     if (!holdings.length) { toast('No holdings to export', 'info'); return; }
     const tv = totalValue();
@@ -2844,7 +2888,7 @@ setInterval(() => {
         renderAll();
         await refreshPrices();   // fetches REST snapshot then opens WS
     } else {
-        updateWsPill('error');   // no holdings yet — nothing to stream
+        updateWsPill('no-data'); // no holdings yet — nothing to stream
         renderAll();
     }
     initAIPanel();
